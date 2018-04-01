@@ -1,0 +1,153 @@
+library(ggplot2) # Data visualization
+library(readr) # CSV file I/O, e.g. the read_csv function
+library(jsonlite)
+library(dplyr)
+library(purrr)
+library(lubridate)
+library(randomForest)
+library(stringr)
+library(tidytext)
+
+
+# Train data
+train_data <- fromJSON("../input/train.json")
+vars <- setdiff(names(train_data), c("photos", "features"))
+train_data <- map_at(train_data, vars, unlist) %>% tibble::as_tibble(.)
+
+# Test data
+test_data <- fromJSON("../input/test.json")
+vars <- setdiff(names(test_data), c("photos", "features"))
+test_data <- map_at(test_data, vars, unlist) %>% tibble::as_tibble(.)
+
+train_data_bak%>%
+    filter(map(features, is_empty) != TRUE) %>%
+      tidyr::unnest(features) %>%
+      unnest_tokens(word, features)%>%
+      select(listing_id,word)->train_feature
+#unnest Unnest a list column.
+Description
+If you have a list-column, this makes each element of the list its own row. List-columns can either
+be atomic vectors or data frames. Each row must have the same number of entries.
+
+
+
+
+# Removing sparse terms from the DTM
+train_dtm<-removeSparseTerms(train_dtm, .90)
+test_dtm<-removeSparseTerms(test_dtm, .90)
+
+removeSparseTerms(x, sparse)
+Arguments
+x
+A DocumentTermMatrix or a TermDocumentMatrix.
+sparse
+A numeric for the maximal allowed sparsity in the range from bigger zero to smaller one.
+Value:
+A term-document matrix where those terms from x are removed which have at least a sparse percentage of empty 
+(i.e., terms occurring 0 times in a document) elements. I.e., the resulting matrix contains only terms with a sparse factor of less than sparse	  
+
+
+# converting DTM to dataframe
+train_dtm_mat<-as.matrix(train_dtm)
+train_dtm_mat<-as.data.frame(train_dtm_mat)
+test_dtm_mat<-as.matrix(test_dtm)
+test_dtm_mat<-as.data.frame(test_dtm_mat)
+
+# Creating column for listing_id variable
+train_dtm_mat$listing_id<-as.integer(row.names(train_dtm_mat))
+test_dtm_mat$listing_id<-as.integer(row.names(test_dtm_mat))
+
+
+Create training features
+In [10]:
+train_data$created<-ymd_hms(train_data$created) # Convert time stamp
+train_data$month<-month(train_data$created)     # Creating month column
+train_data$week<-week(train_data$created)       # Creating week column
+train_data$mday<-mday(train_data$created)       # Creating month of day feature
+train_data$description_length<-nchar(train_data$description) # Feature for description length
+train_data$feature_length<-nchar(train_data$features) # Feature for feature length
+train_data$feature_count<-str_count(train_data$features,",") # Feature for tag count
+train_data$photo_count<-str_count(train_data$photos,",") # Feature for photo count
+train_data$Has_Building<-as.factor(ifelse(train_data$building_id==0,'Solo','Building'))
+
+# Creating feature for building with high number of unique manager
+train_data%>%
+    group_by(building_id)%>%
+    summarise(manager_count=n_distinct(manager_id))%>%
+    mutate(IsManaged=ifelse(manager_count>10,'Highly_managed','Less_managed'))%>%
+    right_join(train_data,by='building_id')->train_data
+
+# Creating feature for building with high number of flats
+train_data%>%
+    group_by(building_id)%>%
+    summarise(building_count=n())%>%
+    mutate(IsBigBuilding=ifelse(building_count>20,'Big_Building','Small_Building'))%>%
+    right_join(train_data,by='building_id')->train_data
+
+test_data$created<-ymd_hms(test_data$created)
+test_data$month<-month(test_data$created)
+test_data$week<-week(test_data$created)
+test_data$mday<-mday(test_data$created)
+test_data$description_length<-nchar(test_data$description)
+test_data$feature_length<-nchar(test_data$features)
+test_data$feature_count<-str_count(test_data$features,",")
+test_data$photo_count<-str_count(test_data$photos,",")
+test_data$Has_Building<-as.factor(ifelse(test_data$building_id==0,'Solo','Building'))
+
+# Creating feature for building with high number of unique manager
+test_data%>%
+    group_by(building_id)%>%
+    summarise(manager_count=n_distinct(manager_id))%>%
+    mutate(IsManaged=ifelse(manager_count>10,'Highly_managed','Less_managed'))%>%
+    right_join(test_data,by='building_id')->test_data
+
+
+# Creating feature for building with high number of flats
+test_data%>%
+    group_by(building_id)%>%
+    summarise(building_count=n())%>%
+    mutate(IsBigBuilding=ifelse(building_count>20,'Big_Building','Small_Building'))%>%
+    right_join(test_data,by='building_id')->test_data
+
+# creating factor Y variable
+train_data$interest_level<-as.factor(train_data$interest_level)
+
+# Joining text and other features
+train_data_final<-left_join(train_data,train_dtm_mat,by='listing_id')
+test_data_final<-left_join(test_data,test_dtm_mat,by='listing_id')
+
+# Removing NAs
+train_data_final[is.na(train_data_final)]<-0
+test_data_final[is.na(test_data_final)]<-0
+
+output.forest <- randomForest(interest_level ~ month + week + mday + description_length +
+                              bathrooms + bedrooms + latitude + longitude + price + feature_length +
+                              feature_count + photo_count + Has_Building + building_count 
+                              + manager_count + building + doorman + elevator+laundry+allowed+cats+
+                              dogs+fee+no+center+fitness+outdoor+space+dishwasher+floors+hardwood+
+                              pre+war+room+deck+roof+dining+high+unit, 
+                              data = train_data_final,ntree=1000)
+							  
+
+Call:
+ randomForest(formula = interest_level ~ month + week + mday +      description_length + bathrooms + bedrooms + latitude + longitude +      price + feature_length + feature_count + photo_count + Has_Building +      building_count + manager_count + building + doorman + elevator +      laundry + allowed + cats + dogs + fee + no + center + fitness +      outdoor + space + dishwasher + floors + hardwood + pre +      war + room + deck + roof + dining + high + unit, data = train_data_final,      ntree = 1000) 
+               Type of random forest: classification
+                     Number of trees: 1000
+No. of variables tried at each split: 6
+
+        OOB estimate of  error rate: 26.64%
+Confusion matrix:
+       high   low medium class.error
+high    927  1416   1496  0.75853087
+low     183 31876   2225  0.07023685
+medium  652  7174   3403  0.69694541
+
+
+predicted <- predict(output.forest,test_data_final,type="prob")
+
+allpredictions = as.data.frame(cbind (predicted, test_data$listing_id))
+names(allpredictions)<-c("high","low","medium","listing_id")
+allpredictions=allpredictions[,c(1,3,2,4)]
+
+
+write.csv(allpredictions,'sample_submission4.csv',row.names=FALSE)
